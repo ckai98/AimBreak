@@ -140,8 +140,7 @@ class SixTargetController(QObject):
         self._round_timer.stop()
         for t in self._targets:
             t.despawn()
-        self._set_state(SixState.EXITING)
-        # 清场后回 IDLE，保证可重启（不长期停留在 EXITING）
+        # 清场后回 IDLE，保证可重启
         self._set_state(SixState.IDLE)
 
     # ---------- 内部状态转换与调度 ----------

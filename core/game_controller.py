@@ -102,7 +102,6 @@ class GameController(QObject):
         """
         self._scheduler.stop()
         self._target.hide_target()
-        self._set_state(GameState.EXITING)
         # 清场后回 IDLE，保证模式切换后可重新 start()
         self._set_state(GameState.IDLE)
 
