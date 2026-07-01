@@ -11,6 +11,8 @@ class ConfigManager:
         "target_size_px": 30,         # 小球直径（像素）
         "target_color_hex": "#FF3B30",  # 小球颜色（十六进制）
         "target_lifetime_ms": 2000,   # 小球存活时间（毫秒）
+        "six_target_speed": 4,        # 六目标模式球飞行速度（px/帧）
+        "six_target_size_px": 50,     # 六目标模式飞行球直径（像素）
     }
 
     def __init__(self):
@@ -70,3 +72,15 @@ class ConfigManager:
         """小球存活时间（毫秒）"""
         return int(self._settings.value(
             "target_lifetime_ms", self._DEFAULTS["target_lifetime_ms"]))
+
+    @property
+    def six_target_speed(self) -> int:
+        """六目标模式球飞行速度（px/帧）"""
+        return int(self._settings.value(
+            "six_target_speed", self._DEFAULTS["six_target_speed"]))
+
+    @property
+    def six_target_size_px(self) -> int:
+        """六目标模式飞行球直径（像素）"""
+        return int(self._settings.value(
+            "six_target_size_px", self._DEFAULTS["six_target_size_px"]))

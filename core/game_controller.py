@@ -96,13 +96,15 @@ class GameController(QObject):
             self._enter_waiting()
 
     def request_quit(self):
-        """请求退出：任意状态 -> EXITING。
+        """请求退出：清场后回 IDLE，便于模式切换后重启。
 
         停止调度器并隐藏目标，确保不留残影与悬挂定时器。
         """
         self._scheduler.stop()
         self._target.hide_target()
         self._set_state(GameState.EXITING)
+        # 清场后回 IDLE，保证模式切换后可重新 start()
+        self._set_state(GameState.IDLE)
 
     # ---------- 内部状态转换 ----------
 

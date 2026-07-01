@@ -15,15 +15,19 @@ class TrayManager(QObject):
     sig_pause_clicked = Signal()
     sig_resume_clicked = Signal()
     sig_quit_clicked = Signal()
+    sig_mode_switch = Signal(str)   # "classic" | "six_target"
 
-    def __init__(self, stats_repo, parent=None):
+    def __init__(self, stats_repo, six_stats_repo=None, parent=None):
         """
         Args:
             stats_repo: StatsRepository 实例，用于读取当日统计。
+            six_stats_repo: SixTargetStatsRepository 实例，用于读取六目标当日统计（可选）。
             parent: 父 QObject。
         """
         super().__init__(parent)
         self._stats = stats_repo
+        self._six_stats = six_stats_repo
+        self._current_mode = "classic"
 
         self._tray = QSystemTrayIcon(self._make_default_icon(), parent)
         self._tray.setToolTip("办公室反应训练器")
@@ -66,15 +70,34 @@ class TrayManager(QObject):
             )
         self._act_stats.setText(text)
 
+    def refresh_six_stats(self):
+        """刷新六目标当日统计文本。
+
+        无记录或零射击时显示“暂无”；否则显示 命中数/总数 与平均反应时间。
+        """
+        if self._six_stats is None:
+            return
+        stats = self._six_stats.get_today_stats()
+        if stats is None or stats.get("total_shots", 0) == 0:
+            text = "六目标今日: 暂无"
+        else:
+            text = (
+                f"六目标今日: 命中 {stats['hits']}/{stats['total_shots']}"
+                f"，平均 {stats['avg_reaction_ms']}ms"
+            )
+        self._act_six_stats.setText(text)
+
     # ---------- 内部实现 ----------
 
     def _build_menu(self):
-        """构建右键菜单：暂停 / 恢复 / 分隔 / 今日统计 / 分隔 / 退出。"""
+        """构建右键菜单：暂停 / 恢复 / 分隔 / 今日统计 / 六目标统计 / 分隔 / 训练模式 / 分隔 / 退出。"""
         self._act_pause = QAction("暂停", self._menu)
         self._act_resume = QAction("恢复", self._menu)
         self._act_quit = QAction("退出", self._menu)
         self._act_stats = QAction("今日: 暂无", self._menu)
         self._act_stats.setEnabled(False)  # 统计项仅展示，不可点击
+        self._act_six_stats = QAction("六目标今日: 暂无", self._menu)
+        self._act_six_stats.setEnabled(False)  # 统计项仅展示，不可点击
 
         # 菜单点击仅发信号，业务逻辑由 GameController 处理
         self._act_pause.triggered.connect(self.sig_pause_clicked.emit)
@@ -85,11 +108,28 @@ class TrayManager(QObject):
         self._menu.addAction(self._act_resume)
         self._menu.addSeparator()
         self._menu.addAction(self._act_stats)
+        self._menu.addAction(self._act_six_stats)
+        self._menu.addSeparator()
+        mode_menu = self._menu.addMenu("训练模式")
+        self._act_mode_classic = QAction("✓ 普通模式", mode_menu)
+        self._act_mode_six = QAction("  六目标模式", mode_menu)
+        self._act_mode_classic.triggered.connect(lambda: self._switch_mode("classic"))
+        self._act_mode_six.triggered.connect(lambda: self._switch_mode("six_target"))
+        mode_menu.addAction(self._act_mode_classic)
+        mode_menu.addAction(self._act_mode_six)
         self._menu.addSeparator()
         self._menu.addAction(self._act_quit)
 
         # 初始刷新统计
         self.refresh_today_stats()
+        self.refresh_six_stats()
+
+    def _switch_mode(self, mode: str):
+        """切换训练模式，更新菜单勾选文本并发送信号。"""
+        self._current_mode = mode
+        self._act_mode_classic.setText("✓ 普通模式" if mode == "classic" else "  普通模式")
+        self._act_mode_six.setText("✓ 六目标模式" if mode == "six_target" else "  六目标模式")
+        self.sig_mode_switch.emit(mode)
 
     def _make_default_icon(self) -> QIcon:
         """生成默认托盘图标（16x16 红色实心圆）。
