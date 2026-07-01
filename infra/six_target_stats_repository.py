@@ -74,6 +74,26 @@ class SixTargetStatsRepository:
         data = self._load_all()
         return data.get("six_target", {}).get(today)
 
+    def update_best_score(self, score: int):
+        """更新跨日全局历史最高分。
+
+        写入 stats.json 的 six_target > best_score 节点（与日期无关，全局唯一）。
+        仅当 score 大于现有 best_score 时才更新。
+
+        Args:
+            score: 本局得分。
+        """
+        data = self._load_all()
+        six = data.setdefault("six_target", {})
+        if score > six.get("best_score", 0):
+            six["best_score"] = score
+            self._save_all(data)
+
+    def get_best_score(self) -> int:
+        """返回历史最高分，无记录返回 0。"""
+        data = self._load_all()
+        return int(data.get("six_target", {}).get("best_score", 0))
+
     def _load_all(self) -> dict:
         """读取全部统计数据。文件不存在或损坏时容错返回空字典。"""
         if not os.path.exists(self._file_path):

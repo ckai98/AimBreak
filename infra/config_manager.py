@@ -2,9 +2,16 @@ from PySide6.QtCore import QSettings
 
 
 class ConfigManager:
-    """配置管理器：封装 QSettings，提供 5 项配置的读写与默认值。"""
+    """配置管理器：封装 QSettings，提供配置的读写与默认值。
 
-    # 5 项配置的默认值（键名 -> 默认值）
+    包含配置项：
+      - 5 项普通配置：min_interval_ms / max_interval_ms / target_size_px /
+        target_color_hex / target_lifetime_ms
+      - 4 项六目标配置：six_target_speed / six_target_size_px /
+        six_target_min_spacing_px / six_target_duration_ms
+    """
+
+    # 配置的默认值（键名 -> 默认值）
     _DEFAULTS = {
         "min_interval_ms": 5000,      # 最小触发间隔（毫秒）
         "max_interval_ms": 30000,     # 最大触发间隔（毫秒）
@@ -13,6 +20,8 @@ class ConfigManager:
         "target_lifetime_ms": 2000,   # 小球存活时间（毫秒）
         "six_target_speed": 4,        # 六目标模式球飞行速度（px/帧）
         "six_target_size_px": 50,     # 六目标模式飞行球直径（像素）
+        "six_target_min_spacing_px": 150,   # 六目标最小间距（默认 3×球径 50=150）
+        "six_target_duration_ms": 60000,    # 六目标单局时长（毫秒）
     }
 
     def __init__(self):
@@ -84,3 +93,15 @@ class ConfigManager:
         """六目标模式飞行球直径（像素）"""
         return int(self._settings.value(
             "six_target_size_px", self._DEFAULTS["six_target_size_px"]))
+
+    @property
+    def six_target_min_spacing_px(self) -> int:
+        """六目标最小间距（像素）"""
+        return int(self._settings.value(
+            "six_target_min_spacing_px", self._DEFAULTS["six_target_min_spacing_px"]))
+
+    @property
+    def six_target_duration_ms(self) -> int:
+        """六目标单局时长（毫秒）"""
+        return int(self._settings.value(
+            "six_target_duration_ms", self._DEFAULTS["six_target_duration_ms"]))

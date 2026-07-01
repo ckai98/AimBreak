@@ -16,6 +16,7 @@ class TrayManager(QObject):
     sig_resume_clicked = Signal()
     sig_quit_clicked = Signal()
     sig_mode_switch = Signal(str)   # "classic" | "six_target"
+    sig_settings_clicked = Signal()  # 难度设置入口，由 main.py 监听后弹出对话框
 
     def __init__(self, stats_repo, six_stats_repo=None, parent=None):
         """
@@ -73,24 +74,28 @@ class TrayManager(QObject):
     def refresh_six_stats(self):
         """刷新六目标当日统计文本。
 
-        无记录或零射击时显示“暂无”；否则显示 命中数/总数 与平均反应时间。
+        无记录或零射击时显示“暂无”；否则显示 命中数/总数、平均反应时间与最高分。
+        跨日全局历史最高分通过 self._six_stats.get_best_score() 获取。
         """
         if self._six_stats is None:
             return
         stats = self._six_stats.get_today_stats()
+        best = self._six_stats.get_best_score()
         if stats is None or stats.get("total_shots", 0) == 0:
             text = "六目标今日: 暂无"
+            if best > 0:
+                text = f"六目标今日: 暂无（最高 {best}）"
         else:
             text = (
                 f"六目标今日: 命中 {stats['hits']}/{stats['total_shots']}"
-                f"，平均 {stats['avg_reaction_ms']}ms"
+                f"，平均 {stats['avg_reaction_ms']}ms，最高 {best}"
             )
         self._act_six_stats.setText(text)
 
     # ---------- 内部实现 ----------
 
     def _build_menu(self):
-        """构建右键菜单：暂停 / 恢复 / 分隔 / 今日统计 / 六目标统计 / 分隔 / 训练模式 / 分隔 / 退出。"""
+        """构建右键菜单：暂停 / 恢复 / 分隔 / 今日统计 / 六目标统计 / 分隔 / 训练模式 / 难度设置... / 分隔 / 退出。"""
         self._act_pause = QAction("暂停", self._menu)
         self._act_resume = QAction("恢复", self._menu)
         self._act_quit = QAction("退出", self._menu)
@@ -98,11 +103,13 @@ class TrayManager(QObject):
         self._act_stats.setEnabled(False)  # 统计项仅展示，不可点击
         self._act_six_stats = QAction("六目标今日: 暂无", self._menu)
         self._act_six_stats.setEnabled(False)  # 统计项仅展示，不可点击
+        self._act_settings = QAction("难度设置...", self._menu)
 
         # 菜单点击仅发信号，业务逻辑由 GameController 处理
         self._act_pause.triggered.connect(self.sig_pause_clicked.emit)
         self._act_resume.triggered.connect(self.sig_resume_clicked.emit)
         self._act_quit.triggered.connect(self.sig_quit_clicked.emit)
+        self._act_settings.triggered.connect(self.sig_settings_clicked.emit)
 
         self._menu.addAction(self._act_pause)
         self._menu.addAction(self._act_resume)
@@ -117,6 +124,7 @@ class TrayManager(QObject):
         self._act_mode_six.triggered.connect(lambda: self._switch_mode("six_target"))
         mode_menu.addAction(self._act_mode_classic)
         mode_menu.addAction(self._act_mode_six)
+        self._menu.addAction(self._act_settings)
         self._menu.addSeparator()
         self._menu.addAction(self._act_quit)
 
