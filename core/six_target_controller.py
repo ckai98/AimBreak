@@ -74,6 +74,8 @@ class SixTargetController(QObject):
         self._miss_detector = miss_detector
         self._result = result_widget
         self._state = SixState.IDLE
+        # 视角瞄准模式 v2：注入的 ViewportController，None 表示未启用
+        self._viewport = None
 
         # 读取六目标专属配置（不用普通模式的 target_size_px）
         size = self._config.six_target_size_px
@@ -114,6 +116,21 @@ class SixTargetController(QObject):
         """当前状态（只读）。"""
         return self._state
 
+    @property
+    def targets(self):
+        """受控目标列表（只读，供 ViewportController 等外部组件引用）。"""
+        return self._targets
+
+    def set_viewport(self, viewport):
+        """注入 ViewportController，接入视角瞄准模式 v2。
+
+        将 viewport 的命中/miss 信号连到本 controller 的 _on_hit/_on_miss，
+        视角模式下由 viewport 统一判定屏幕中心准星是否命中目标渲染椭圆。
+        """
+        self._viewport = viewport
+        viewport.sig_crosshair_hit.connect(self._on_hit)
+        viewport.sig_crosshair_miss.connect(self._on_miss)
+
     # ---------- 对外控制接口（供 TrayManager 调用） ----------
 
     def start(self):
@@ -143,6 +160,9 @@ class SixTargetController(QObject):
             self._hud.hide_hud()
         if self._miss_detector is not None:
             self._miss_detector.hide()
+        # 视角模式 v2：暂停时停止 viewport tick、隐藏准星与自身
+        if self._viewport is not None:
+            self._viewport.stop()
         self._set_state(SixState.PAUSED)
 
     def resume(self):
@@ -162,6 +182,9 @@ class SixTargetController(QObject):
             self._hud.show_hud()
         if self._miss_detector is not None:
             self._miss_detector.show_fullscreen()
+        # 视角模式 v2：_spawn_all 后开启 viewport（重置偏移、显示、tick）
+        if self._viewport is not None:
+            self._viewport.start()
         self._set_state(SixState.RUNNING)
 
     def request_quit(self):
@@ -180,6 +203,9 @@ class SixTargetController(QObject):
             self._miss_detector.hide()
         if self._result is not None:
             self._result.hide()
+        # 视角模式 v2：退出时停止 viewport tick、隐藏准星与自身
+        if self._viewport is not None:
+            self._viewport.stop()
         # 清场后回 IDLE，保证可重启
         self._set_state(SixState.IDLE)
 
@@ -202,6 +228,9 @@ class SixTargetController(QObject):
         self._round_elapsed.start()
         self._round_timer.start(self._round_duration_ms())
         self._hud_tick_timer.start()
+        # 视角瞄准模式 v2：spawn 与 timer 启动后开启 viewport（重置偏移、显示、tick）
+        if self._viewport is not None:
+            self._viewport.start()
         self._set_state(SixState.RUNNING)
 
     def _spawn_all(self):
@@ -213,6 +242,9 @@ class SixTargetController(QObject):
         for t in self._targets:
             t.spawn(speed)
             t.raise_()
+        # 目标 raise 后把 viewport/准星提到最上层，确保点击由 viewport 接管
+        if self._viewport is not None:
+            self._viewport.bring_to_front()
 
     def _respawn(self, target_id: int):
         """重置单个目标的位置（命中后调用），带防重叠。
@@ -233,7 +265,15 @@ class SixTargetController(QObject):
         self._targets[target_id].spawn_at_safe_position(
             self._config.six_target_speed, other_positions, min_dist
         )
+        # 按当前视角偏移定位渲染位置，避免视角模式下重生球闪到逻辑坐标
+        if self._viewport is not None:
+            self._targets[target_id].move_to_render_pos(
+                self._viewport.view_dx, self._viewport.view_dy
+            )
         self._targets[target_id].raise_()
+        # 目标 raise 后把 viewport/准星提到最上层
+        if self._viewport is not None:
+            self._viewport.bring_to_front()
 
     def _on_hit(self, target_id: int, reaction_ms: int):
         """命中回调：计 hit 并记录统计，随即重置该球。"""
@@ -267,11 +307,14 @@ class SixTargetController(QObject):
             self._hud.hide_hud()
         if self._miss_detector is not None:
             self._miss_detector.hide()
+        # 视角模式 v2：局终停止 viewport tick、隐藏准星与自身（置 FINISHED 之前）
+        if self._viewport is not None:
+            self._viewport.stop()
         total = self._hits + self._misses
         accuracy = round(self._hits / total * 100, 1) if total > 0 else 0.0
-        base_score = self._hits * 1500
+        base_score = self._hits * 750
         miss_penalty = self._misses * 300
-        acc_multiplier = 0.5 + accuracy / 100
+        acc_multiplier = 0.8 + (accuracy / 100) * 0.4
         score = max(0, int((base_score - miss_penalty) * acc_multiplier))
         self._stats.update_best_score(score)
         result = {

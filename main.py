@@ -16,11 +16,13 @@ from infra.config_manager import ConfigManager
 from infra.six_target_stats_repository import SixTargetStatsRepository
 from infra.stats_repository import StatsRepository
 from infra.win_helper import WinHelper
+from view.crosshair_widget import CrosshairWidget
 from view.hud_widget import HudWidget
 from view.miss_detector_widget import MissDetectorWidget
 from view.result_widget import ResultWidget
 from view.target_widget import TargetWidget
 from view.tray_manager import TrayManager
+from view.viewport_controller import ViewportController
 
 
 def main() -> int:
@@ -50,6 +52,7 @@ def main() -> int:
     hud = HudWidget()
     miss_detector = MissDetectorWidget()
     result_widget = ResultWidget()
+    crosshair = CrosshairWidget()  # 不 show，由 viewport.start() 内部调 show_crosshair
 
     # 5. 创建控制层
     scheduler = Scheduler()
@@ -58,6 +61,11 @@ def main() -> int:
         config, six_stats,
         hud=hud, miss_detector=miss_detector, result_widget=result_widget,
     )
+
+    # 视角瞄准模式 v2：先有 controller（含 targets），再构造 viewport，再反向注入
+    viewport = ViewportController(six_controller.targets, crosshair)
+    six_controller.set_viewport(viewport)
+    miss_detector.set_viewport(viewport)
 
     # 6. 连接信号
     # 托盘菜单 -> 控制器状态切换

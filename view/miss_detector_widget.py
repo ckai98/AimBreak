@@ -13,6 +13,12 @@
 z-order：
     本 widget 与目标球均有 WindowStaysOnTopHint，后 show 的会浮在上面。
     main.py 中先 show 本 widget 再 show 目标球即可（或目标球 raise_()）。
+
+视角瞄准模式 v2：
+    视角模式下由 ViewportController 统一接管点击命中/miss 判定（鼠标锁定屏幕中心，
+    viewport 用自己的全屏透明捕获窗口判断屏幕中心准星是否落在目标渲染椭圆内）。
+    通过 set_viewport 注入 viewport 引用后，本层 mousePressEvent 会停用自身的
+    sig_miss 上报（避免重复上报），改由 viewport 唯一上报 miss。
 """
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QGuiApplication
@@ -33,6 +39,15 @@ class MissDetectorWidget(QWidget):
         )
         self.setAttribute(Qt.WA_TranslucentBackground)
         # 不设 setMask：整个窗口接收点击
+        # 视角模式 v2：注入 viewport 后由 viewport 统一判定 miss，本层停用自身上报
+        self._viewport = None
+
+    def set_viewport(self, viewport):
+        """注入 ViewportController 引用。
+
+        注入后视角模式下由 viewport 统一判定 miss，本层 mousePressEvent 不再 emit sig_miss。
+        """
+        self._viewport = viewport
 
     def show_fullscreen(self):
         """覆盖主屏幕并显示。"""
@@ -41,5 +56,10 @@ class MissDetectorWidget(QWidget):
         self.show()
 
     def mousePressEvent(self, event):
-        """点击空白区域 = miss，发射 sig_miss。"""
+        """点击空白区域 = miss，发射 sig_miss。
+
+        视角模式 v2：若已注入 viewport，则由 viewport 统一判定 miss，本层不重复上报。
+        """
+        if self._viewport is not None:
+            return
         self.sig_miss.emit()

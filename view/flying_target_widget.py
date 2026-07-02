@@ -104,7 +104,8 @@ class FlyingTargetWidget(QWidget):
         sigma_y = screen.height() * 0.28
         margin = self._size
         max_attempts = 50
-        best_x, best_y = None, None
+        # 兜底初始化为屏幕中心，避免循环内无合法候选时 best_x 为 None 导致崩溃
+        best_x, best_y = cx, cy
         for attempt in range(max_attempts):
             x = random.gauss(cx, sigma_x)
             y = random.gauss(cy, sigma_y)
@@ -143,6 +144,22 @@ class FlyingTargetWidget(QWidget):
         """根据浮点球心坐标放置窗口并刷新椭圆蒙版。"""
         x = int(self._cx - self._size / 2)
         y = int(self._cy - self._size / 2)
+        self.setGeometry(x, y, self._size, self._size)
+        self.setMask(QRegion(0, 0, self._size, self._size, QRegion.Ellipse))
+
+    def move_to_render_pos(self, view_dx: float, view_dy: float):
+        """按视角偏移把球重新定位到渲染位置（视角瞄准模式 v2）。
+
+        渲染球心 = (self._cx + view_dx, self._cy + view_dy)。
+        注意：本方法只负责渲染定位，绝不写入 self._cx / self._cy，
+        逻辑坐标保持不变，由 ViewportController 每 tick 调用。
+        """
+        # 渲染球心 = 逻辑球心 + 视角偏移
+        render_cx = self._cx + view_dx
+        render_cy = self._cy + view_dy
+        # 窗口左上角 = 渲染球心 - 半边长
+        x = int(render_cx - self._size / 2)
+        y = int(render_cy - self._size / 2)
         self.setGeometry(x, y, self._size, self._size)
         self.setMask(QRegion(0, 0, self._size, self._size, QRegion.Ellipse))
 
