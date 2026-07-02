@@ -108,6 +108,10 @@ class ViewportController(QWidget):
         dx = pt.x - cx
         dy = pt.y - cy
 
+        # 1px 死区过滤：避免 SetCursorPos 重置后下一帧残留 1-2px 误差导致轻微漂移
+        if abs(dx) <= 1 and abs(dy) <= 1:
+            return
+
         # 反向累积视角偏移
         self._view_dx -= dx
         self._view_dy -= dy
@@ -154,8 +158,11 @@ class ViewportController(QWidget):
     # ---------- 生命周期 ----------
 
     def start(self):
-        """开始视角瞄准：重置偏移、对齐屏幕、显示并置顶、启动 tick。"""
-        self.reset()
+        """开始视角瞄准：对齐屏幕、显示并置顶、启动 tick。
+
+        注意：本方法不再调用 reset()。偏移重置由调用方在 _begin_round 显式触发，
+        以保证 pause/resume 之间视角偏移可续接（暂停不归零，仅在新局开始时归零）。
+        """
         self._resize_to_screen()
         self.show()
         self.raise_()
@@ -166,17 +173,19 @@ class ViewportController(QWidget):
         self._timer.start()
 
     def stop(self):
-        """停止视角瞄准：停 tick、隐藏准星与自身、重置偏移。
+        """停止视角瞄准：停 tick、隐藏准星与自身。
 
-        重置偏移确保退出/局终/暂停后视角状态干净；resume 会再走 start()
-        （内部 reset）重新开始，行为一致。
+        幂等：若已停止则直接返回，避免重复 hide / 重复 emit 副作用。
+        不重置偏移：保证 resume 时视角可续接暂停前的状态；下一局 _begin_round
+        会显式调用 reset() 归零。
         """
+        if not self._active:
+            return
         self._timer.stop()
         self._active = False
         if self._crosshair is not None:
             self._crosshair.hide_crosshair()
         self.hide()
-        self.reset()
 
     def reset(self):
         """重置视角偏移为零。"""

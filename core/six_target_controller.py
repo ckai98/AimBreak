@@ -229,7 +229,9 @@ class SixTargetController(QObject):
         self._round_timer.start(self._round_duration_ms())
         self._hud_tick_timer.start()
         # 视角瞄准模式 v2：spawn 与 timer 启动后开启 viewport（重置偏移、显示、tick）
+        # reset() 仅在新局开始时调用，pause/resume 之间偏移可续接
         if self._viewport is not None:
+            self._viewport.reset()
             self._viewport.start()
         self._set_state(SixState.RUNNING)
 
@@ -312,8 +314,8 @@ class SixTargetController(QObject):
             self._viewport.stop()
         total = self._hits + self._misses
         accuracy = round(self._hits / total * 100, 1) if total > 0 else 0.0
-        base_score = self._hits * 750
-        miss_penalty = self._misses * 300
+        base_score = self._hits * 1000
+        miss_penalty = self._misses * 200
         acc_multiplier = 0.8 + (accuracy / 100) * 0.4
         score = max(0, int((base_score - miss_penalty) * acc_multiplier))
         self._stats.update_best_score(score)
