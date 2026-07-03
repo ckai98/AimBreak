@@ -3,9 +3,9 @@
 
 职责：
     1. 全屏透明覆盖层（捕获点击，不穿透），RUNNING 状态下锁定鼠标到屏幕中心；
-    2. 每 8ms tick 读取鼠标相对屏幕中心的 delta，反向累积为视角偏移
-       (view_dx, view_dy)，并立即把鼠标重置回屏幕中心；
-    3. 驱动所有可见目标的 move_to_render_pos，让目标球按"逻辑坐标 + 偏移"渲染；
+    2. 每 8ms tick 读取鼠标相对屏幕中心的 delta，反向累积为视角角度
+       (angle_x, angle_y)（弧度），并立即把鼠标重置回屏幕中心；
+    3. 驱动所有可见目标的 move_to_render_pos，让目标球按 3D 透视公式渲染；
     4. 点击时统一判定屏幕中心准星是否落在某目标渲染椭圆内：
        命中则 emit sig_crosshair_hit(target_id, reaction_ms)，
        否则 emit sig_crosshair_miss。
@@ -25,6 +25,7 @@ z-order：
 """
 
 import ctypes
+import math
 from ctypes import wintypes
 
 from PySide6.QtCore import Qt, Signal, QTimer
@@ -39,6 +40,8 @@ class ViewportController(QWidget):
     sig_crosshair_hit = Signal(int, int)
     # 未命中
     sig_crosshair_miss = Signal()
+    # ESC 键按下：供 controller 退出当前局
+    sig_escape_pressed = Signal()
 
     def __init__(self, targets, crosshair=None, parent=None):
         super().__init__(parent)
@@ -48,9 +51,18 @@ class ViewportController(QWidget):
         # 屏幕中心准星（CrosshairWidget），可空
         self._crosshair = crosshair
 
-        # 视角偏移（像素）：逻辑坐标 + 偏移 = 渲染坐标
-        self._view_dx = 0.0
-        self._view_dy = 0.0
+        # 视角角度（弧度）：逻辑坐标 + 3D 透视偏移 = 渲染坐标
+        self._angle_x = 0.0
+        self._angle_y = 0.0
+        # 焦距（像素）：默认 = 屏幕宽 × 0.8
+        self._focal_length = 0.0
+        # 屏幕中心与限位角缓存（_resize_to_screen 时更新）
+        self._screen_cx = 0
+        self._screen_cy = 0
+        self._max_angle_x = 0.0
+        self._max_angle_y = 0.0
+        # 多屏适配：缓存当前训练屏幕区，None 时 _resize_to_screen fallback 主屏
+        self._screen_rect = None
 
         # tick / 点击守卫：仅在 start 后置 True，stop 后置 False
         self._active = False
@@ -77,32 +89,69 @@ class ViewportController(QWidget):
     # ---------- 只读属性 ----------
 
     @property
-    def view_dx(self) -> float:
-        """当前视角水平偏移（像素）。"""
-        return self._view_dx
+    def angle_x(self) -> float:
+        return self._angle_x
 
     @property
-    def view_dy(self) -> float:
-        """当前视角垂直偏移（像素）。"""
-        return self._view_dy
+    def angle_y(self) -> float:
+        return self._angle_y
+
+    @property
+    def focal_length(self) -> float:
+        return self._focal_length
+
+    @property
+    def screen_cx(self) -> int:
+        return self._screen_cx
+
+    @property
+    def screen_cy(self) -> int:
+        return self._screen_cy
 
     # ---------- 内部工具 ----------
 
-    def _resize_to_screen(self):
-        """覆盖主屏幕 availableGeometry（排除任务栏区域）。"""
-        screen = QGuiApplication.primaryScreen().availableGeometry()
-        self.setGeometry(screen)
+    def _resize_to_screen(self, screen_rect=None):
+        """覆盖指定屏幕 availableGeometry（排除任务栏区域）。
+
+        screen_rect 为 None 时用缓存（多屏适配），缓存也为 None 时 fallback 主屏。
+        """
+        if screen_rect is None:
+            screen_rect = self._screen_rect
+        if screen_rect is None:
+            screen_rect = QGuiApplication.primaryScreen().availableGeometry()
+        self._screen_rect = screen_rect
+        self.setGeometry(screen_rect)
+        self._screen_cx = screen_rect.center().x()
+        self._screen_cy = screen_rect.center().y()
+        self._focal_length = screen_rect.width() * 0.8
+        self._max_angle_x = math.atan((screen_rect.width() / 2) * 0.85 / self._focal_length)
+        self._max_angle_y = math.atan((screen_rect.height() / 2) * 0.85 / self._focal_length)
+
+    def set_screen_rect(self, screen_rect):
+        """供 SixTargetController 在 _begin_round 时指定训练屏幕。
+
+        内部会转发给 crosshair，确保准星跟随同一屏幕。
+        """
+        self._resize_to_screen(screen_rect)
+        if self._crosshair is not None:
+            self._crosshair.set_screen_rect(screen_rect)
+
+    def compute_render_pos(self, cx: float, cy: float):
+        """计算逻辑坐标 (cx, cy) 在当前视角下的渲染坐标。
+
+        3D 透视公式：render = screen_center + (logical - screen_center) - focal × tan(angle)
+        距屏幕中心越远的球偏移越大，产生 FPS 透视感。
+        本方法是渲染与命中判定的唯一公式来源，确保两者完全一致。
+        """
+        rcx = self._screen_cx + (cx - self._screen_cx) - self._focal_length * math.tan(self._angle_x)
+        rcy = self._screen_cy + (cy - self._screen_cy) - self._focal_length * math.tan(self._angle_y)
+        return rcx, rcy
 
     def _tick(self):
-        """8ms 核心：读鼠标 delta、反向累积、重置鼠标回中心、驱动目标渲染。
+        """8ms 核心：读鼠标 delta → 角度累积 → clamp 限位 → 重置鼠标 → 驱动目标渲染。"""
+        cx = self._screen_cx
+        cy = self._screen_cy
 
-        反向累积：场景反向跟随鼠标，模拟视角移动 = 世界反向平移。
-        """
-        screen = QGuiApplication.primaryScreen().availableGeometry()
-        cx = screen.center().x()
-        cy = screen.center().y()
-
-        # 读取鼠标当前位置（屏幕坐标）
         pt = wintypes.POINT()
         ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
         dx = pt.x - cx
@@ -112,39 +161,42 @@ class ViewportController(QWidget):
         if abs(dx) <= 1 and abs(dy) <= 1:
             return
 
-        # 反向累积视角偏移
-        self._view_dx -= dx
-        self._view_dy -= dy
+        # 鼠标 delta 转角度 delta（弧度），反向累积模拟视角反向平移
+        d_angle_x = dx / self._focal_length
+        d_angle_y = dy / self._focal_length
+        self._angle_x -= d_angle_x
+        self._angle_y -= d_angle_y
 
-        # 重置鼠标回屏幕中心，实现"锁定"
+        # 限位：视角不超过 max_angle，防止球移出屏幕
+        self._angle_x = max(-self._max_angle_x, min(self._max_angle_x, self._angle_x))
+        self._angle_y = max(-self._max_angle_y, min(self._max_angle_y, self._angle_y))
+
         ctypes.windll.user32.SetCursorPos(cx, cy)
 
-        # 驱动所有可见目标按偏移重新渲染
+        # 驱动所有可见目标按 3D 透视公式重新渲染
         for t in self._targets:
             if t.isVisible():
-                t.move_to_render_pos(self._view_dx, self._view_dy)
+                rcx, rcy = self.compute_render_pos(t._cx, t._cy)
+                t.move_to_render_pos(rcx, rcy)
 
     # ---------- 点击判定 ----------
 
     def mousePressEvent(self, event):
         """统一判定屏幕中心准星是否落在某目标渲染椭圆内。
 
-        遍历可见目标，计算其渲染球心（逻辑坐标 + 偏移）与屏幕中心的距离，
+        遍历可见目标，通过 compute_render_pos 计算其渲染球心与屏幕中心的距离，
         若落在半径内则计命中并上报反应时间；遍历完无命中则上报 miss。
         """
         if not self._active:
             return
 
-        screen = QGuiApplication.primaryScreen().availableGeometry()
-        scx = screen.center().x()
-        scy = screen.center().y()
+        scx = self._screen_cx
+        scy = self._screen_cy
 
         for t in self._targets:
             if not t.isVisible():
                 continue
-            # 渲染球心 = 逻辑球心 + 视角偏移
-            rcx = t._cx + self._view_dx
-            rcy = t._cy + self._view_dy
+            rcx, rcy = self.compute_render_pos(t._cx, t._cy)
             r = t._size / 2
             # 圆形命中判定（椭圆蒙版的球即圆形）
             if (scx - rcx) ** 2 + (scy - rcy) ** 2 <= r ** 2:
@@ -154,6 +206,13 @@ class ViewportController(QWidget):
 
         # 遍历完无命中
         self.sig_crosshair_miss.emit()
+
+    def keyPressEvent(self, event):
+        """监听 ESC 键，emit sig_escape_pressed 供 controller 退出当前局。"""
+        if event.key() == Qt.Key_Escape:
+            self.sig_escape_pressed.emit()
+            return
+        super().keyPressEvent(event)
 
     # ---------- 生命周期 ----------
 
@@ -169,6 +228,9 @@ class ViewportController(QWidget):
         if self._crosshair is not None:
             self._crosshair.show_crosshair()
             self._crosshair.raise_()
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.setFocus()
+        self.setWindowModality(Qt.ApplicationModal)
         self._active = True
         self._timer.start()
 
@@ -181,6 +243,7 @@ class ViewportController(QWidget):
         """
         if not self._active:
             return
+        self.setWindowModality(Qt.NonModal)
         self._timer.stop()
         self._active = False
         if self._crosshair is not None:
@@ -188,9 +251,9 @@ class ViewportController(QWidget):
         self.hide()
 
     def reset(self):
-        """重置视角偏移为零。"""
-        self._view_dx = 0.0
-        self._view_dy = 0.0
+        """重置视角角度为零。"""
+        self._angle_x = 0.0
+        self._angle_y = 0.0
 
     def bring_to_front(self):
         """把 viewport 与准星提到最上层（供 controller 在目标 raise 后调用）。"""

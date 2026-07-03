@@ -9,6 +9,7 @@ class ConfigManager:
         target_color_hex / target_lifetime_ms
       - 4 项六目标配置：six_target_speed / six_target_size_px /
         six_target_min_spacing_px / six_target_duration_ms
+      - 1 项多屏适配配置：active_screen_index
     """
 
     # 配置的默认值（键名 -> 默认值）
@@ -22,6 +23,7 @@ class ConfigManager:
         "six_target_size_px": 50,     # 六目标模式飞行球直径（像素）
         "six_target_min_spacing_px": 150,   # 六目标最小间距（默认 3×球径 50=150）
         "six_target_duration_ms": 60000,    # 六目标单局时长（毫秒）
+        "active_screen_index": 0,     # 训练屏幕索引（QGuiApplication.screens() 下标）
     }
 
     def __init__(self):
@@ -105,3 +107,14 @@ class ConfigManager:
         """六目标单局时长（毫秒）"""
         return int(self._settings.value(
             "six_target_duration_ms", self._DEFAULTS["six_target_duration_ms"]))
+
+    @property
+    def active_screen_index(self) -> int:
+        """训练屏幕索引（QGuiApplication.screens() 下标，0 = 主屏）。"""
+        return int(self._settings.value(
+            "active_screen_index", self._DEFAULTS["active_screen_index"]))
+
+    @active_screen_index.setter
+    def active_screen_index(self, value: int):
+        """写入训练屏幕索引并立即持久化。"""
+        self._settings.setValue("active_screen_index", int(value))

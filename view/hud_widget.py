@@ -39,6 +39,9 @@ class HudWidget(QWidget):
         # 2. 全窗口透明（视觉透明由 QLabel 自带样式背景决定）
         self.setAttribute(Qt.WA_TranslucentBackground)
 
+        # 多屏适配：缓存当前训练屏幕区，None 时 _resize_to_screen fallback 主屏
+        self._screen_rect = None
+
         # 3. 四个统计标签
         self._label_timer = QLabel("60.0")
         self._label_hits = QLabel("命中: 0")
@@ -69,10 +72,21 @@ class HudWidget(QWidget):
 
         # 注意：不在构造函数里 show()，显示由 show_hud 触发
 
-    def _resize_to_screen(self):
-        """覆盖主屏幕 availableGeometry（排除任务栏区域）。"""
-        screen = QGuiApplication.primaryScreen().availableGeometry()
-        self.setGeometry(screen)
+    def _resize_to_screen(self, screen_rect=None):
+        """覆盖指定屏幕 availableGeometry（排除任务栏区域）。
+
+        screen_rect 为 None 时用缓存（多屏适配），缓存也为 None 时 fallback 主屏。
+        """
+        if screen_rect is None:
+            screen_rect = self._screen_rect
+        if screen_rect is None:
+            screen_rect = QGuiApplication.primaryScreen().availableGeometry()
+        self._screen_rect = screen_rect
+        self.setGeometry(screen_rect)
+
+    def set_screen_rect(self, screen_rect):
+        """供 SixTargetController 在 _begin_round 时指定训练屏幕。"""
+        self._resize_to_screen(screen_rect)
 
     def update_stats(self, hits: int, misses: int, remaining_ms: int):
         """刷新 HUD 文本。

@@ -17,6 +17,7 @@ from infra.six_target_stats_repository import SixTargetStatsRepository
 from infra.stats_repository import StatsRepository
 from infra.win_helper import WinHelper
 from view.crosshair_widget import CrosshairWidget
+from view.countdown_widget import CountdownWidget
 from view.hud_widget import HudWidget
 from view.miss_detector_widget import MissDetectorWidget
 from view.result_widget import ResultWidget
@@ -53,6 +54,7 @@ def main() -> int:
     miss_detector = MissDetectorWidget()
     result_widget = ResultWidget()
     crosshair = CrosshairWidget()  # 不 show，由 viewport.start() 内部调 show_crosshair
+    countdown = CountdownWidget()  # 3-2-1-GO 倒计时覆盖层（Task 4）
 
     # 5. 创建控制层
     scheduler = Scheduler()
@@ -65,6 +67,8 @@ def main() -> int:
     # 视角瞄准模式 v2：先有 controller（含 targets），再构造 viewport，再反向注入
     viewport = ViewportController(six_controller.targets, crosshair)
     six_controller.set_viewport(viewport)
+    six_controller.set_countdown(countdown)
+    viewport.sig_escape_pressed.connect(six_controller.request_quit)
     miss_detector.set_viewport(viewport)
 
     # 6. 连接信号
@@ -121,7 +125,7 @@ def main() -> int:
     # 难度设置对话框（Task 13）：配置六目标难度参数，下一局开始时生效
     def show_settings_dialog():
         from PySide6.QtWidgets import (
-            QDialog, QFormLayout, QSpinBox, QDialogButtonBox, QMessageBox,
+            QDialog, QFormLayout, QSpinBox, QComboBox, QDialogButtonBox, QMessageBox,
         )
         dlg = QDialog()
         dlg.setWindowTitle("六目标难度设置")
@@ -142,9 +146,24 @@ def main() -> int:
         spacing_box.setValue(config.six_target_min_spacing_px)
         spacing_box.setSuffix(" px")
 
+        # 多屏适配：列出所有屏幕的几何信息，按 config.active_screen_index 选中
+        screen_box = QComboBox()
+        screens = QGuiApplication.screens()
+        for i, s in enumerate(screens):
+            g = s.availableGeometry()
+            screen_box.addItem(
+                f"屏幕 {i + 1}: {g.width()}×{g.height()} @ ({g.x()},{g.y()})"
+            )
+        cur_idx = config.active_screen_index
+        if 0 <= cur_idx < len(screens):
+            screen_box.setCurrentIndex(cur_idx)
+        else:
+            screen_box.setCurrentIndex(0)
+
         form.addRow("球径:", size_box)
         form.addRow("单局时长:", duration_box)
         form.addRow("最小间距:", spacing_box)
+        form.addRow("训练屏幕:", screen_box)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(dlg.accept)
@@ -155,6 +174,7 @@ def main() -> int:
             config.set("six_target_size_px", size_box.value())
             config.set("six_target_duration_ms", duration_box.value() * 1000)
             config.set("six_target_min_spacing_px", spacing_box.value())
+            config.active_screen_index = screen_box.currentIndex()
             QMessageBox.information(dlg, "已保存", "设置已保存，下一局开始时生效。")
 
     tray.sig_settings_clicked.connect(show_settings_dialog)

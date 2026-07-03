@@ -39,14 +39,28 @@ class CrosshairWidget(QWidget):
         # 2. 全窗口透明（仅 paintEvent 绘制的十字线可见）
         self.setAttribute(Qt.WA_TranslucentBackground)
 
+        # 多屏适配：缓存当前训练屏幕区，None 时 _resize_to_screen fallback 主屏
+        self._screen_rect = None
+
         self._resize_to_screen()
 
         # 注意：不在构造函数里 show()，显示由 show_crosshair 触发
 
-    def _resize_to_screen(self):
-        """覆盖主屏幕 availableGeometry（排除任务栏区域）。"""
-        screen = QGuiApplication.primaryScreen().availableGeometry()
-        self.setGeometry(screen)
+    def _resize_to_screen(self, screen_rect=None):
+        """覆盖指定屏幕 availableGeometry（排除任务栏区域）。
+
+        screen_rect 为 None 时用缓存（多屏适配），缓存也为 None 时 fallback 主屏。
+        """
+        if screen_rect is None:
+            screen_rect = self._screen_rect
+        if screen_rect is None:
+            screen_rect = QGuiApplication.primaryScreen().availableGeometry()
+        self._screen_rect = screen_rect
+        self.setGeometry(screen_rect)
+
+    def set_screen_rect(self, screen_rect):
+        """供 ViewportController 在 set_screen_rect 时转发，指定准星所在屏幕。"""
+        self._resize_to_screen(screen_rect)
 
     def paintEvent(self, event):
         """在窗口几何中心绘制白色十字准星。

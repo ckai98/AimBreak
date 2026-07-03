@@ -25,6 +25,7 @@
 from enum import Enum, auto
 
 from PySide6.QtCore import QObject, Signal, QTimer, QElapsedTimer
+from PySide6.QtGui import QGuiApplication
 
 from view.flying_target_widget import FlyingTargetWidget
 
@@ -37,11 +38,12 @@ ROUND_DURATION_MS = 60_000
 
 class SixState(Enum):
     """六目标训练状态枚举。"""
-    IDLE = auto()      # 程序启动初始态 / 退出清场后回归态
-    RUNNING = auto()   # 6 球并发显示 + 倒计时进行中
-    PAUSED = auto()    # 暂停（托盘触发）
-    FINISHED = auto()  # 单局结束（非瞬态，等待重新 start）
-    EXITING = auto()   # 退出过渡态（清场中，不必长期停留）
+    IDLE = auto()           # 程序启动初始态 / 退出清场后回归态
+    COUNTING_DOWN = auto()  # 开局前 3-2-1-GO 倒计时
+    RUNNING = auto()        # 6 球并发显示 + 倒计时进行中
+    PAUSED = auto()         # 暂停（托盘触发）
+    FINISHED = auto()       # 单局结束（非瞬态，等待重新 start）
+    EXITING = auto()        # 退出过渡态（清场中，不必长期停留）
 
 
 class SixTargetController(QObject):
@@ -76,6 +78,10 @@ class SixTargetController(QObject):
         self._state = SixState.IDLE
         # 视角瞄准模式 v2：注入的 ViewportController，None 表示未启用
         self._viewport = None
+        # 3-2-1-GO 倒计时覆盖层（Task 4），None 表示未启用，直接 _begin_round
+        self._countdown = None
+        # 多屏适配：本局训练屏幕区缓存（_begin_round 时由 _get_active_screen_rect 设置）
+        self._active_screen_rect = None
 
         # 读取六目标专属配置（不用普通模式的 target_size_px）
         size = self._config.six_target_size_px
@@ -131,16 +137,34 @@ class SixTargetController(QObject):
         viewport.sig_crosshair_hit.connect(self._on_hit)
         viewport.sig_crosshair_miss.connect(self._on_miss)
 
+    def set_countdown(self, countdown):
+        """注入 CountdownWidget，接入 3-2-1-GO 倒计时。
+
+        sig_finished → _on_countdown_finished → _begin_round
+        sig_cancelled → request_quit（ESC 取消）
+        """
+        self._countdown = countdown
+        countdown.sig_finished.connect(self._on_countdown_finished)
+        countdown.sig_cancelled.connect(self.request_quit)
+
     # ---------- 对外控制接口（供 TrayManager 调用） ----------
 
     def start(self):
-        """启动一局：IDLE -> RUNNING。
+        """启动一局：IDLE -> COUNTING_DOWN -> RUNNING。
 
-        仅在 IDLE 状态可启动，其他状态静默拒绝。
+        若注入了 CountdownWidget，先进入 3-2-1-GO 倒计时；
+        倒计时结束 sig_finished 触发 _begin_round 进入 RUNNING。
+        无 CountdownWidget 则直接 _begin_round（向后兼容）。
         """
         if self._state != SixState.IDLE:
             return  # 拒绝非 IDLE 启动
-        self._begin_round()
+        if self._countdown is not None:
+            self._set_state(SixState.COUNTING_DOWN)
+            screen_rect = self._get_active_screen_rect()
+            self._countdown.set_screen_rect(screen_rect)
+            self._countdown.start_countdown(screen_rect)
+        else:
+            self._begin_round()
 
     def pause(self):
         """暂停：RUNNING -> PAUSED。
@@ -172,7 +196,7 @@ class SixTargetController(QObject):
         """
         if self._state != SixState.PAUSED:
             return
-        self._spawn_all()
+        self._spawn_all(self._active_screen_rect)
         remaining = max(self._round_duration_ms() - self._elapsed_ms, 0)
         # 重新启动 elapsed 计时，供下次暂停再续
         self._round_elapsed.start()
@@ -203,6 +227,10 @@ class SixTargetController(QObject):
             self._miss_detector.hide()
         if self._result is not None:
             self._result.hide()
+        # 3-2-1-GO 倒计时清理（Task 4）：ESC 取消 / 托盘退出 / 模式切换时
+        # 都会走 request_quit，确保倒计时挂起时也能停止定时器并隐藏覆盖层
+        if self._countdown is not None:
+            self._countdown.stop_countdown()
         # 视角模式 v2：退出时停止 viewport tick、隐藏准星与自身
         if self._viewport is not None:
             self._viewport.stop()
@@ -215,8 +243,27 @@ class SixTargetController(QObject):
         """从 config 读取单局时长（毫秒）。"""
         return self._config.six_target_duration_ms
 
+    def _on_countdown_finished(self):
+        """倒计时结束，真正开始一局。"""
+        if self._state != SixState.COUNTING_DOWN:
+            return
+        self._begin_round()
+
     def _begin_round(self):
         """开新一局：清零计分、显隐 view 层、spawn 6 球、启动倒计时。"""
+        # 每局开始重新读取 config 应用到现有目标球（不重建对象）
+        size = self._config.six_target_size_px
+        color = self._config.target_color_hex
+        for t in self._targets:
+            t.update_appearance(size, color)
+        # 多屏适配：根据 config.active_screen_index 计算本局训练屏幕区，
+        # 分发给 viewport / hud / crosshair，并在 _spawn_all / _respawn 中传给目标球
+        screen_rect = self._get_active_screen_rect()
+        self._active_screen_rect = screen_rect
+        if self._viewport is not None:
+            self._viewport.set_screen_rect(screen_rect)
+        if self._hud is not None:
+            self._hud.set_screen_rect(screen_rect)
         self._hits = 0
         self._misses = 0
         self._elapsed_ms = 0
@@ -224,7 +271,7 @@ class SixTargetController(QObject):
             self._hud.show_hud()
         if self._miss_detector is not None:
             self._miss_detector.show_fullscreen()
-        self._spawn_all()
+        self._spawn_all(screen_rect)
         self._round_elapsed.start()
         self._round_timer.start(self._round_duration_ms())
         self._hud_tick_timer.start()
@@ -235,14 +282,23 @@ class SixTargetController(QObject):
             self._viewport.start()
         self._set_state(SixState.RUNNING)
 
-    def _spawn_all(self):
+    def _get_active_screen_rect(self):
+        """从 config.active_screen_index 获取屏幕可用区，越界回退 primaryScreen。"""
+        screens = QGuiApplication.screens()
+        idx = self._config.active_screen_index
+        if 0 <= idx < len(screens):
+            return screens[idx].availableGeometry()
+        return QGuiApplication.primaryScreen().availableGeometry()
+
+    def _spawn_all(self, screen_rect=None):
         """按配置速度 spawn 全部 6 球（不含防重叠，防重叠在 _respawn 中处理）。
 
         spawn 后调 raise_() 确保目标球位于 miss_detector 之上。
+        screen_rect 指定出生屏幕区，None 时由 spawn 内部 fallback primaryScreen。
         """
         speed = self._config.six_target_speed
         for t in self._targets:
-            t.spawn(speed)
+            t.spawn(speed, screen_rect)
             t.raise_()
         # 目标 raise 后把 viewport/准星提到最上层，确保点击由 viewport 接管
         if self._viewport is not None:
@@ -265,13 +321,14 @@ class SixTargetController(QObject):
         ]
         min_dist = float(self._config.six_target_min_spacing_px)
         self._targets[target_id].spawn_at_safe_position(
-            self._config.six_target_speed, other_positions, min_dist
+            self._config.six_target_speed, other_positions, min_dist,
+            self._active_screen_rect,
         )
         # 按当前视角偏移定位渲染位置，避免视角模式下重生球闪到逻辑坐标
         if self._viewport is not None:
-            self._targets[target_id].move_to_render_pos(
-                self._viewport.view_dx, self._viewport.view_dy
-            )
+            t = self._targets[target_id]
+            rcx, rcy = self._viewport.compute_render_pos(t._cx, t._cy)
+            t.move_to_render_pos(rcx, rcy)
         self._targets[target_id].raise_()
         # 目标 raise 后把 viewport/准星提到最上层
         if self._viewport is not None:

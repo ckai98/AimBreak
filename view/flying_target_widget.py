@@ -65,22 +65,24 @@ class FlyingTargetWidget(QWidget):
 
         # 注意：不在构造函数里 show()，显示由 spawn 触发
 
-    def spawn(self, speed_px_per_frame: float = 4.0):
+    def spawn(self, speed_px_per_frame: float = 4.0, screen_rect=None):
         """全屏高斯分布静态出生（不飞行）。
 
         speed_px_per_frame 参数保留以兼容 Controller 调用签名，当前不使用。
+        screen_rect 指定出生屏幕区，None 时 fallback 到 primaryScreen。
         """
-        screen = QGuiApplication.primaryScreen().availableGeometry()
-        cx = screen.x() + screen.width() / 2
-        cy = screen.y() + screen.height() / 2
-        sigma_x = screen.width() * 0.28
-        sigma_y = screen.height() * 0.28
+        if screen_rect is None:
+            screen_rect = QGuiApplication.primaryScreen().availableGeometry()
+        cx = screen_rect.x() + screen_rect.width() / 2
+        cy = screen_rect.y() + screen_rect.height() / 2
+        sigma_x = screen_rect.width() * 0.28
+        sigma_y = screen_rect.height() * 0.28
         margin = self._size
         while True:
             x = random.gauss(cx, sigma_x)
             y = random.gauss(cy, sigma_y)
-            if (screen.x() + margin < x < screen.right() - margin and
-                    screen.y() + margin < y < screen.bottom() - margin):
+            if (screen_rect.x() + margin < x < screen_rect.right() - margin and
+                    screen_rect.y() + margin < y < screen_rect.bottom() - margin):
                 break
         self._cx, self._cy = x, y
         self._vx, self._vy = 0.0, 0.0   # 静止，不飞行
@@ -89,19 +91,22 @@ class FlyingTargetWidget(QWidget):
         self.show()
         self._elapsed.start()
 
-    def spawn_at_safe_position(self, speed_px_per_frame: float, other_positions, min_dist: float):
+    def spawn_at_safe_position(self, speed_px_per_frame: float, other_positions, min_dist: float,
+                               screen_rect=None):
         """带防重叠的最小间距出生。在高斯采样循环中加碰撞检查。
 
         Args:
             speed_px_per_frame: 保留兼容，不使用。
             other_positions: 其他目标的 [(cx, cy), ...] 列表。
             min_dist: 与其他目标的最小间距（像素）。
+            screen_rect: 指定出生屏幕区，None 时 fallback 到 primaryScreen。
         """
-        screen = QGuiApplication.primaryScreen().availableGeometry()
-        cx = screen.x() + screen.width() / 2
-        cy = screen.y() + screen.height() / 2
-        sigma_x = screen.width() * 0.28
-        sigma_y = screen.height() * 0.28
+        if screen_rect is None:
+            screen_rect = QGuiApplication.primaryScreen().availableGeometry()
+        cx = screen_rect.x() + screen_rect.width() / 2
+        cy = screen_rect.y() + screen_rect.height() / 2
+        sigma_x = screen_rect.width() * 0.28
+        sigma_y = screen_rect.height() * 0.28
         margin = self._size
         max_attempts = 50
         # 兜底初始化为屏幕中心，避免循环内无合法候选时 best_x 为 None 导致崩溃
@@ -109,8 +114,8 @@ class FlyingTargetWidget(QWidget):
         for attempt in range(max_attempts):
             x = random.gauss(cx, sigma_x)
             y = random.gauss(cy, sigma_y)
-            if not (screen.x() + margin < x < screen.right() - margin and
-                    screen.y() + margin < y < screen.bottom() - margin):
+            if not (screen_rect.x() + margin < x < screen_rect.right() - margin and
+                    screen_rect.y() + margin < y < screen_rect.bottom() - margin):
                 continue
             # 碰撞检查：距所有 other_positions 均 >= min_dist
             ok = True
@@ -147,21 +152,27 @@ class FlyingTargetWidget(QWidget):
         self.setGeometry(x, y, self._size, self._size)
         self.setMask(QRegion(0, 0, self._size, self._size, QRegion.Ellipse))
 
-    def move_to_render_pos(self, view_dx: float, view_dy: float):
-        """按视角偏移把球重新定位到渲染位置（视角瞄准模式 v2）。
+    def move_to_render_pos(self, render_cx: float, render_cy: float):
+        """按已计算的渲染球心坐标定位窗口（视角瞄准模式 v3 3D 透视）。
 
-        渲染球心 = (self._cx + view_dx, self._cy + view_dy)。
-        注意：本方法只负责渲染定位，绝不写入 self._cx / self._cy，
-        逻辑坐标保持不变，由 ViewportController 每 tick 调用。
+        渲染坐标由 ViewportController.compute_render_pos 计算（3D 透视公式），
+        本方法只负责应用坐标到几何与蒙版，不持有视角状态。
         """
-        # 渲染球心 = 逻辑球心 + 视角偏移
-        render_cx = self._cx + view_dx
-        render_cy = self._cy + view_dy
-        # 窗口左上角 = 渲染球心 - 半边长
         x = int(render_cx - self._size / 2)
         y = int(render_cy - self._size / 2)
         self.setGeometry(x, y, self._size, self._size)
         self.setMask(QRegion(0, 0, self._size, self._size, QRegion.Ellipse))
+
+    def update_appearance(self, size: int, color_hex: str):
+        """更新目标球尺寸与颜色（供 _begin_round 每局重新应用 config）。
+
+        重设 _size / _color 后立即 _place() 刷新几何与蒙版；
+        若窗口当前可见，会按新尺寸重绘。
+        """
+        self._size = size
+        self._color = QColor(color_hex)
+        self._place()
+        self.update()  # 触发 paintEvent 重绘
 
     def paintEvent(self, event):
         """绘制椭圆小球：配置颜色填充 + 白色描边。"""
