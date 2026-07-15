@@ -78,13 +78,16 @@ class FlyingTargetWidget(QWidget):
         sigma_x = screen_rect.width() * 0.28
         sigma_y = screen_rect.height() * 0.28
         margin = self._size
-        while True:
+        max_attempts = 50
+        best_x, best_y = cx, cy
+        for _ in range(max_attempts):
             x = random.gauss(cx, sigma_x)
             y = random.gauss(cy, sigma_y)
             if (screen_rect.x() + margin < x < screen_rect.right() - margin and
                     screen_rect.y() + margin < y < screen_rect.bottom() - margin):
+                best_x, best_y = x, y
                 break
-        self._cx, self._cy = x, y
+        self._cx, self._cy = best_x, best_y
         self._vx, self._vy = 0.0, 0.0   # 静止，不飞行
         self._hit = False
         self._place()

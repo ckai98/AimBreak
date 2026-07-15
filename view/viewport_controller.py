@@ -148,36 +148,56 @@ class ViewportController(QWidget):
         return rcx, rcy
 
     def _tick(self):
-        """8ms 核心：读鼠标 delta → 角度累积 → clamp 限位 → 重置鼠标 → 驱动目标渲染。"""
-        cx = self._screen_cx
-        cy = self._screen_cy
+        """8ms 核心：读鼠标 delta → 角度累积 → clamp 限位 → 重置鼠标 → 驱动目标渲染。
 
-        pt = wintypes.POINT()
-        ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
-        dx = pt.x - cx
-        dy = pt.y - cy
+        健壮性（B2）：ctypes 鼠标调用各自保护，且整体包一层异常兜底，
+        任何失败均解除模态并隐藏覆盖层，提供独立 kill 路径，杜绝视角模式软锁。
+        """
+        try:
+            cx = self._screen_cx
+            cy = self._screen_cy
 
-        # 1px 死区过滤：避免 SetCursorPos 重置后下一帧残留 1-2px 误差导致轻微漂移
-        if abs(dx) <= 1 and abs(dy) <= 1:
+            pt = wintypes.POINT()
+            try:
+                ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
+            except (AttributeError, OSError):
+                # 鼠标读取失败：解除模态、隐藏覆盖层，提供独立退出路径
+                self.stop()
+                return
+            dx = pt.x - cx
+            dy = pt.y - cy
+
+            # 1px 死区过滤：避免 SetCursorPos 重置后下一帧残留 1-2px 误差导致轻微漂移
+            if abs(dx) <= 1 and abs(dy) <= 1:
+                return
+
+            # 鼠标 delta 转角度 delta（弧度），反向累积模拟视角反向平移
+            d_angle_x = dx / self._focal_length
+            d_angle_y = dy / self._focal_length
+            self._angle_x -= d_angle_x
+            self._angle_y -= d_angle_y
+
+            # 限位：视角不超过 max_angle，防止球移出屏幕
+            self._angle_x = max(-self._max_angle_x, min(self._max_angle_x, self._angle_x))
+            self._angle_y = max(-self._max_angle_y, min(self._max_angle_y, self._angle_y))
+
+            try:
+                ctypes.windll.user32.SetCursorPos(cx, cy)
+            except (AttributeError, OSError):
+                # 鼠标重置失败：解除模态、隐藏覆盖层，提供独立退出路径
+                self.stop()
+                return
+
+            # 驱动所有可见目标按 3D 透视公式重新渲染
+            for t in self._targets:
+                if t.isVisible():
+                    rcx, rcy = self.compute_render_pos(t._cx, t._cy)
+                    t.move_to_render_pos(rcx, rcy)
+        except Exception:
+            # 未预期异常（如焦距为 0 的除零、渲染计算异常等）：
+            # 解除模态、隐藏覆盖层，作为独立 kill 路径，防止事件循环卡死/软锁
+            self.stop()
             return
-
-        # 鼠标 delta 转角度 delta（弧度），反向累积模拟视角反向平移
-        d_angle_x = dx / self._focal_length
-        d_angle_y = dy / self._focal_length
-        self._angle_x -= d_angle_x
-        self._angle_y -= d_angle_y
-
-        # 限位：视角不超过 max_angle，防止球移出屏幕
-        self._angle_x = max(-self._max_angle_x, min(self._max_angle_x, self._angle_x))
-        self._angle_y = max(-self._max_angle_y, min(self._max_angle_y, self._angle_y))
-
-        ctypes.windll.user32.SetCursorPos(cx, cy)
-
-        # 驱动所有可见目标按 3D 透视公式重新渲染
-        for t in self._targets:
-            if t.isVisible():
-                rcx, rcy = self.compute_render_pos(t._cx, t._cy)
-                t.move_to_render_pos(rcx, rcy)
 
     # ---------- 点击判定 ----------
 
